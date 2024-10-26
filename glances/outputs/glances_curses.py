@@ -1099,13 +1099,13 @@ class _GlancesCurses:
         # Then display the interface and log a message
         if duration <= 0:
             logger.warning('Update and export time higher than refresh_time.')
-            duration = 0.1
+            duration = 0.5
 
         # Wait duration (in s) time
         isexitkey = False
         countdown = Timer(duration)
         # Set the default timeout (in ms) between two getch
-        self.term_window.timeout(100)
+        self.term_window.timeout(150)
         while not countdown.finished() and not isexitkey:
             # Getkey
             pressedkey = self.__catch_key(return_to_browser=return_to_browser)
