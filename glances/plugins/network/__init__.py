@@ -9,6 +9,7 @@
 """Network plugin."""
 
 import psutil
+import netifaces
 
 from glances.logger import logger
 from glances.plugins.plugin.model import GlancesPluginModel
@@ -223,6 +224,48 @@ class PluginModel(GlancesPluginModel):
             self.views[i[self.get_key()]]['bytes_recv']['decoration'] = alert_rx
             self.views[i[self.get_key()]]['bytes_sent']['decoration'] = alert_tx
 
+    
+    def get_mac_addresses():
+        mac_dict = {}
+        for interface in netifaces.interfaces():
+            mac = netifaces.ifaddresses(interface).get(netifaces.AF_LINK)
+            if mac:
+                mac_dict[interface] = mac[0]['addr']
+        return mac_dict
+
+    
+    def load_vendor_database(file_path="ieee-oui.txt"):
+        """
+        Load the vendor database from the ieee-oui.txt file.
+        Each line is in the format: <MAC_PREFIX>\t<VENDOR_NAME>.
+        """
+        vendor_dict = {}
+        try:
+            with open(file_path, "r") as file:
+                for line in file:
+                    # Split each line into MAC prefix and vendor name
+                    parts = line.strip().split("\t")
+                    if len(parts) == 2:
+                        mac_prefix = parts[0].upper()  # Ensure uppercase for matching
+                        vendor_name = parts[1].strip()
+                        vendor_dict[mac_prefix] = vendor_name
+        except FileNotFoundError:
+            print(f"Error: File {file_path} not found.")
+        except Exception as e:
+            print(f"Error reading the file: {e}")
+        return vendor_dict
+
+    
+    def get_vendor(mac, vendor_db):
+        """
+        Match the MAC address prefix with the vendor database.
+        Extracts the first 3 bytes of the MAC address, removes delimiters,
+        and converts to uppercase for lookup.
+        """
+        mac_prefix = mac.replace(":", "").replace("-", "").upper()[:6]
+        return vendor_db.get(mac_prefix, "Unknown Vendor")
+
+    
     def msg_curse(self, args=None, max_width=None):
         """Return the dict to display in the curse interface."""
         # Init the return message
