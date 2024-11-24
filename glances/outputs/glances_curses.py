@@ -787,12 +787,12 @@ class _GlancesCurses:
         """Display the network stats with vendor information."""
         for iface in network_stats.get('interfaces', []):  # Iterate over network interfaces
             mac_address = iface.get('mac_address', 'N/A')
-            vendor = get_vendor(mac_address, vendor_db)
+            vendor = get_vendor(mac_address, vendor_db)  # Get vendor for the MAC address
     
             # Format the display line to include vendor information
             display_line = f"{iface['name']} - Vendor: {vendor} - Rx: {iface['rx']} Tx: {iface['tx']}"
     
-            # Display the formatted line
+            # Display the formatted line in the terminal window
             self.term_window.addnstr(self.line, self.column, display_line, curses.A_BOLD)
             self.new_line()
 
