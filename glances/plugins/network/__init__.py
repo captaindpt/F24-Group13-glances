@@ -10,6 +10,8 @@
 
 import psutil
 import netifaces
+import os
+from datetime import datetime
 
 from glances.logger import logger
 from glances.plugins.plugin.model import GlancesPluginModel
@@ -43,6 +45,7 @@ fields_description = {
         'unit': 'bitpersecond',
     },
     'is_up': {'description': 'Is the interface up ?', 'unit': 'bool'},
+    'vendor': {'description': 'Network interface vendor name'},
 }
 
 # SNMP OID
@@ -78,6 +81,15 @@ class PluginModel(GlancesPluginModel):
             fields_description=fields_description,
             stats_init_value=[],
         )
+
+        # Set up debug logging
+        self.debug_log = os.path.join(os.getcwd(), 'logs', 'network_debug.log')
+        os.makedirs(os.path.dirname(self.debug_log), exist_ok=True)
+        with open(self.debug_log, 'w') as f:
+            f.write(f"=== Network Plugin Debug Log Started at {datetime.now()} ===\n\n")
+
+        # Set debug mode flag (default to False)
+        self.debug_mode = False
 
         # We want to display the stat in the curse interface
         self.display_curse = True
@@ -121,9 +133,22 @@ class PluginModel(GlancesPluginModel):
 
     @GlancesPluginModel._manage_rate
     def update_local(self):
+        self.debug_log_write("\n=== Starting update_local() ===")
         # Update stats using the standard system lib
         stats = self.get_init_value()
-    
+
+        # Load vendor database
+        vendor_db = self.load_vendor_database()
+        
+        # Get MAC addresses for all interfaces
+        mac_addresses = self.get_mac_addresses()
+
+        # Grab network interface stat using the psutil net_io_counter method
+        # Example:
+        # { 'veth4cbf8f0a': snetio(
+        #   bytes_sent=102038421, bytes_recv=1263258,
+        #   packets_sent=25046, packets_recv=14114,
+        #   errin=0, errout=0, dropin=0, dropout=0), ... }
         try:
             net_io_counters = psutil.net_io_counters(pernic=True)
             net_status = psutil.net_if_stats()
@@ -146,6 +171,15 @@ class PluginModel(GlancesPluginModel):
             stat['interface_name'] = interface_name
             stat['alias'] = self.has_alias(interface_name)
             stat['bytes_all'] = stat['bytes_sent'] + stat['bytes_recv']
+
+            # Add vendor information if MAC address is available
+            if interface_name in mac_addresses:
+                stat['vendor'] = self.get_vendor(mac_addresses[interface_name], vendor_db)
+            else:
+                stat['vendor'] = "Unknown"
+
+            # Interface speed in Mbps, convert it to bps
+            # Can be always 0 on some OSes
             stat['speed'] = stat['speed'] * 1048576
     
             # Add MAC address and vendor name
@@ -190,48 +224,139 @@ class PluginModel(GlancesPluginModel):
             self.views[i[self.get_key()]]['bytes_recv']['decoration'] = alert_rx
             self.views[i[self.get_key()]]['bytes_sent']['decoration'] = alert_tx
 
-    
-    def get_mac_addresses():
+    def get_mac_addresses(self):
+        self.debug_log_write("Getting MAC addresses...")
         mac_dict = {}
-        for interface in netifaces.interfaces():
-            mac = netifaces.ifaddresses(interface).get(netifaces.AF_LINK)
-            if mac:
-                mac_dict[interface] = mac[0]['addr']
+        try:
+            logger.debug("Getting MAC addresses for interfaces...")
+            for interface in netifaces.interfaces():
+                logger.debug(f"Getting MAC for interface: {interface}")
+                self.debug_log_write(f"Checking interface: {interface}")
+                try:
+                    addrs = netifaces.ifaddresses(interface)
+                    self.debug_log_write(f"Interface {interface} addresses: {addrs}")
+                    mac = addrs.get(netifaces.AF_LINK)
+                    if mac:
+                        mac_dict[interface] = mac[0]['addr']
+                        self.debug_log_write(f"Found MAC for {interface}: {mac[0]['addr']}")
+                    else:
+                        self.debug_log_write(f"No MAC found for {interface}")
+                except Exception as e:
+                    self.debug_log_write(f"Error getting MAC for {interface}: {str(e)}")
+        except Exception as e:
+            self.debug_log_write(f"Error in get_mac_addresses: {str(e)}")
+        self.debug_log_write(f"Final MAC dictionary: {mac_dict}")
         return mac_dict
 
-    
-    def load_vendor_database(file_path="ieee-oui.txt"):
+    def load_vendor_database(self, file_path="ieee-oui.txt"):
         """
         Load the vendor database from the ieee-oui.txt file.
-        Each line is in the format: <MAC_PREFIX>\t<VENDOR_NAME>.
+        Each line is in the format: <OUI><TAB><Vendor>
         """
+        self.debug_log_write(f"Loading vendor database from: {file_path}")
         vendor_dict = {}
         try:
-            with open(file_path, "r") as file:
-                for line in file:
-                    # Split each line into MAC prefix and vendor name
-                    parts = line.strip().split("\t")
-                    if len(parts) == 2:
-                        mac_prefix = parts[0].upper()  # Ensure uppercase for matching
-                        vendor_name = parts[1].strip()
-                        vendor_dict[mac_prefix] = vendor_name
-        except FileNotFoundError:
-            print(f"Error: File {file_path} not found.")
+            # First try to find the file in the same directory as the plugin
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            possible_paths = [
+                os.path.join(current_dir, file_path),
+                os.path.join(current_dir, '..', file_path),
+                os.path.join(current_dir, '..', '..', file_path),
+                file_path  # Try absolute path last
+            ]
+            
+            file_found = False
+            for path in possible_paths:
+                self.debug_log_write(f"Trying path: {path}")
+                if os.path.exists(path):
+                    self.debug_log_write(f"Found database at: {path}")
+                    file_found = True
+                    with open(path, "r", encoding='utf-8') as file:
+                        for line_num, line in enumerate(file, 1):
+                            try:
+                                line = line.strip()
+                                if not line or line.startswith('#'):
+                                    continue
+                                    
+                                parts = line.split("\t")
+                                if len(parts) >= 2:
+                                    mac_prefix = parts[0].strip().upper()
+                                    vendor_name = parts[1].strip()
+                                    if len(mac_prefix) == 6:  # Only store valid 6-character prefixes
+                                        vendor_dict[mac_prefix] = vendor_name
+                                        self.debug_log_write(f"Added vendor entry: {mac_prefix} -> {vendor_name}")
+                            except Exception as e:
+                                self.debug_log_write(f"Error parsing line {line_num}: {str(e)}")
+                    break
+                    
+            if not file_found:
+                self.debug_log_write("Database file not found in any expected location")
+                
+            self.debug_log_write(f"Loaded {len(vendor_dict)} vendor entries")
         except Exception as e:
-            print(f"Error reading the file: {e}")
+            self.debug_log_write(f"Error loading vendor database: {str(e)}")
         return vendor_dict
 
-    
-    def get_vendor(mac, vendor_db):
+    def get_vendor(self, mac, vendor_db):
         """
         Match the MAC address prefix with the vendor database.
-        Extracts the first 3 bytes of the MAC address, removes delimiters,
-        and converts to uppercase for lookup.
+        The database uses 6-character hex values without delimiters.
         """
-        mac_prefix = mac.replace(":", "").replace("-", "").upper()[:6]
-        return vendor_db.get(mac_prefix, "Unknown Vendor")
+        if self.debug_mode:
+            self.debug_log_write(f"\n{'='*50}")
+            self.debug_log_write(f"Looking up vendor for MAC: {mac}")
+        
+        try:
+            # Step 1: Handle both delimited and non-delimited formats
+            if ':' in mac or '-' in mac or '.' in mac:
+                # Split into bytes and pad each with leading zeros
+                bytes_list = mac.replace('-', ':').replace('.', ':').split(':')
+                if self.debug_mode:
+                    self.debug_log_write(f"Split into bytes: {bytes_list}")
+                
+                # Pad each byte with leading zeros
+                normalized_bytes = [byte.zfill(2) for byte in bytes_list]
+                if self.debug_mode:
+                    self.debug_log_write(f"Normalized bytes: {normalized_bytes}")
+                
+                # Take first three bytes and join
+                mac_prefix = ''.join(normalized_bytes[:3]).upper()
+                if self.debug_mode:
+                    self.debug_log_write(f"Final MAC prefix from bytes: {mac_prefix}")
+            else:
+                # Already in non-delimited format
+                cleaned_mac = mac.upper()
+                mac_prefix = cleaned_mac[:6]
+                if self.debug_mode:
+                    self.debug_log_write(f"Final MAC prefix from raw: {mac_prefix}")
+            
+            # Look up the vendor
+            vendor = vendor_db.get(mac_prefix)
+            if vendor:
+                if self.debug_mode:
+                    self.debug_log_write(f"Found vendor: {vendor}")
+                return vendor
+            
+            if self.debug_mode:
+                self.debug_log_write(f"No vendor found for prefix: {mac_prefix}")
+            return "Unknown Vendor"
+                
+        except Exception as e:
+            if self.debug_mode:
+                self.debug_log_write(f"Error in get_vendor: {str(e)}")
+            return "Unknown Vendor"
 
-    
+    def debug_log_write(self, message):
+        """Write debug message to the log file."""
+        if not self.debug_mode:
+            return
+            
+        try:
+            with open(self.debug_log, 'a') as f:
+                f.write(f"[{datetime.now()}] {message}\n")
+        except Exception as e:
+            logger.error(f"Failed to write to debug log: {e}")
+
     def msg_curse(self, args=None, max_width=None):
         """Return the dict to display in the curse interface."""
         # Init the return message
@@ -252,6 +377,9 @@ class PluginModel(GlancesPluginModel):
         # Header
         msg = '{:{width}}'.format('NETWORK', width=name_max_width)
         ret.append(self.curse_add_line(msg, "TITLE"))
+        msg = '{:>15}'.format('VENDOR')
+        ret.append(self.curse_add_line(msg))
+
         if args.network_cumul:
             # Cumulative stats
             if args.network_sum:
@@ -324,6 +452,12 @@ class PluginModel(GlancesPluginModel):
             # Include vendor in the display line
             msg = f'{if_name} ({vendor})'
             ret.append(self.curse_add_line(msg))
+
+            # Add vendor information
+            vendor = i.get('vendor', 'Unknown')[:15]  # Truncate to 15 chars
+            msg = '{:>15}'.format(vendor)
+            ret.append(self.curse_add_line(msg))
+
             if args.network_sum:
                 msg = f'{ax:>14}'
                 ret.append(self.curse_add_line(msg))

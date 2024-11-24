@@ -63,5 +63,11 @@ bower_components/
 /*_source.tar.bz2
 
 # Virtual env
-/venv*/
+/venv/
 
+# Logs
+logs/
+*.log
+
+# Personal notes
+large-scale-software-feature-implementation-notes
