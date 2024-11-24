@@ -122,74 +122,40 @@ class PluginModel(GlancesPluginModel):
     @GlancesPluginModel._manage_rate
     def update_local(self):
         # Update stats using the standard system lib
-
         stats = self.get_init_value()
-
-        # Grab network interface stat using the psutil net_io_counter method
-        # Example:
-        # { 'veth4cbf8f0a': snetio(
-        #   bytes_sent=102038421, bytes_recv=1263258,
-        #   packets_sent=25046, packets_recv=14114,
-        #   errin=0, errout=0, dropin=0, dropout=0), ... }
+    
         try:
             net_io_counters = psutil.net_io_counters(pernic=True)
-        except UnicodeDecodeError as e:
-            logger.debug(f'Can not get network interface counters ({e})')
-            return self.stats
-
-        # Grab interface's status (issue #765)
-        # Grab interface's speed (issue #718)
-        # Example:
-        # { 'veth4cbf8f0a': snicstats(
-        #   isup=True, duplex=<NicDuplex.NIC_DUPLEX_FULL: 2>,
-        #   speed=10000, mtu=1500, flags='up,broadcast,running,multicast'), ... }
-        net_status = {}
-        try:
             net_status = psutil.net_if_stats()
             net_addrs = psutil.net_if_addrs()
         except OSError as e:
-            # see psutil #797/glances #1106
-            logger.debug(f'Can not get network interface status ({e})')
-
-        # Filter interfaces (related to #2799)
-        if self.hide_no_up:
-            net_status = {k: v for k, v in net_status.items() if v.isup}
-        if self.hide_no_ip:
-            net_status = {
-                k: v
-                for k, v in net_status.items()
-                if k in net_addrs and any(a.family != psutil.AF_LINK for a in net_addrs[k])
-            }
-
+            logger.debug(f"Cannot retrieve network stats: {e}")
+            return self.stats
+    
+        # Load vendor database once (cache for efficiency)
+        if not hasattr(self, '_vendor_db'):
+            self._vendor_db = load_vendor_database("ieee-oui.txt")
+    
         for interface_name, interface_stat in net_io_counters.items():
-            # Do not take hidden interface into account
-            # or KeyError: 'eth0' when interface is not connected #1348
             if not self.is_display(interface_name) or interface_name not in net_status:
                 continue
-
-            # Filter stats to keep only the fields we want (define in fields_description)
-            # It will also convert psutil objects to a standard Python dict
+    
             stat = self.filter_stats(interface_stat)
             stat.update(self.filter_stats(net_status[interface_name]))
-
-            # Add the key
             stat['key'] = self.get_key()
-
-            # Add disk name
             stat['interface_name'] = interface_name
-
-            # Add alias define in the configuration file
             stat['alias'] = self.has_alias(interface_name)
-
-            # Add sent + revc  stats
             stat['bytes_all'] = stat['bytes_sent'] + stat['bytes_recv']
-
-            # Interface speed in Mbps, convert it to bps
-            # Can be always 0 on some OSes
             stat['speed'] = stat['speed'] * 1048576
-
+    
+            # Add MAC address and vendor name
+            mac_info = net_addrs.get(interface_name, [])
+            mac_address = next((addr.address for addr in mac_info if addr.family == psutil.AF_LINK), "N/A")
+            stat['mac_address'] = mac_address
+            stat['vendor'] = get_vendor(mac_address, self._vendor_db)
+    
             stats.append(stat)
-
+    
         return stats
 
     def update_views(self):
