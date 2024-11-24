@@ -761,10 +761,13 @@ class _GlancesCurses:
     def __display_left(self, stat_display):
         """Display the left sidebar in the Curses interface."""
         self.init_column()
-
+    
         if self.args.disable_left_sidebar:
             return
-
+    
+        # Load the vendor database (consider caching to avoid reloading each time)
+        vendor_db = load_vendor_database("ieee-oui.txt")
+    
         for p in self._left_sidebar:
             if (hasattr(self.args, 'enable_' + p) or hasattr(self.args, 'disable_' + p)) and p in stat_display:
                 self.new_line()
@@ -773,9 +776,27 @@ class _GlancesCurses:
                         stat_display['sensors'],
                         max_y=(self.term_window.getmaxyx()[0] - self.get_stats_display_height(stat_display['now']) - 2),
                     )
+                elif p == 'network':
+                    # Customize the display for the NETWORK plugin
+                    self.display_network_with_vendors(stat_display[p], vendor_db)
                 else:
                     self.display_plugin(stat_display[p])
 
+    
+    def display_network_with_vendors(self, network_stats, vendor_db):
+        """Display the network stats with vendor information."""
+        for iface in network_stats.get('interfaces', []):  # Iterate over network interfaces
+            mac_address = iface.get('mac_address', 'N/A')
+            vendor = get_vendor(mac_address, vendor_db)
+    
+            # Format the display line to include vendor information
+            display_line = f"{iface['name']} - Vendor: {vendor} - Rx: {iface['rx']} Tx: {iface['tx']}"
+    
+            # Display the formatted line
+            self.term_window.addnstr(self.line, self.column, display_line, curses.A_BOLD)
+            self.new_line()
+
+    
     def __display_right(self, stat_display):
         """Display the right sidebar in the Curses interface.
 
