@@ -236,19 +236,19 @@ class PluginModel(GlancesPluginModel):
         """Return the dict to display in the curse interface."""
         # Init the return message
         ret = []
-
+    
         # Only process if stats exist and display plugin enable...
         if not self.stats or self.is_disabled():
             return ret
-
+    
         # Max size for the interface name
         if max_width:
-            name_max_width = max_width - 12
+            name_max_width = max_width - 20  # Adjust width to make space for vendor info
         else:
-            # No max_width defined, return an emptu curse message
+            # No max_width defined, return an empty curse message
             logger.debug(f"No max_width defined for the {self.plugin_name} plugin, it will not be displayed.")
             return ret
-
+    
         # Header
         msg = '{:{width}}'.format('NETWORK', width=name_max_width)
         ret.append(self.curse_add_line(msg, "TITLE"))
@@ -275,6 +275,7 @@ class PluginModel(GlancesPluginModel):
                 ret.append(self.curse_add_line(msg))
                 msg = '{:>7}'.format('Tx/s')
                 ret.append(self.curse_add_line(msg))
+    
         # Interface list (sorted by name)
         for i in self.sorted_stats():
             # Do not display interface in down state (issue #765)
@@ -284,15 +285,18 @@ class PluginModel(GlancesPluginModel):
             if all(self.get_views(item=i[self.get_key()], key=f, option='hidden') for f in self.hide_zero_fields):
                 continue
             # Format stats
-            # Is there an alias for the interface name ?
+            # Is there an alias for the interface name?
             if i['alias'] is None:
                 if_name = i['interface_name'].split(':')[0]
             else:
                 if_name = i['alias']
             if len(if_name) > name_max_width:
                 # Cut interface name if it is too long
-                if_name = '_' + if_name[-name_max_width + 1 :]
-
+                if_name = '_' + if_name[-name_max_width + 1:]
+    
+            # Add vendor information
+            vendor = i.get('vendor', 'Unknown Vendor')
+    
             if args.byte:
                 # Bytes per second (for dummy)
                 to_bit = 1
@@ -301,7 +305,7 @@ class PluginModel(GlancesPluginModel):
                 # Bits per second (for real network administrator | Default)
                 to_bit = 8
                 unit = 'b'
-
+    
             if args.network_cumul and 'bytes_recv' in i:
                 rx = self.auto_unit(int(i['bytes_recv'] * to_bit)) + unit
                 tx = self.auto_unit(int(i['bytes_sent'] * to_bit)) + unit
@@ -314,10 +318,11 @@ class PluginModel(GlancesPluginModel):
                 # Avoid issue when a new interface is created on the fly
                 # Example: start Glances, then start a new container
                 continue
-
+    
             # New line
             ret.append(self.curse_new_line())
-            msg = '{:{width}}'.format(if_name, width=name_max_width)
+            # Include vendor in the display line
+            msg = f'{if_name} ({vendor})'
             ret.append(self.curse_add_line(msg))
             if args.network_sum:
                 msg = f'{ax:>14}'
@@ -335,5 +340,6 @@ class PluginModel(GlancesPluginModel):
                         msg, self.get_views(item=i[self.get_key()], key='bytes_sent', option='decoration')
                     )
                 )
-
+    
         return ret
+
