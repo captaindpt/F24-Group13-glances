@@ -159,7 +159,7 @@ class PluginModel(GlancesPluginModel):
     
         # Load vendor database once (cache for efficiency)
         if not hasattr(self, '_vendor_db'):
-            self._vendor_db = load_vendor_database("ieee-oui.txt")
+            self._vendor_db = self.load_vendor_database("ieee-oui.txt")
     
         for interface_name, interface_stat in net_io_counters.items():
             if not self.is_display(interface_name) or interface_name not in net_status:
@@ -186,7 +186,7 @@ class PluginModel(GlancesPluginModel):
             mac_info = net_addrs.get(interface_name, [])
             mac_address = next((addr.address for addr in mac_info if addr.family == psutil.AF_LINK), "N/A")
             stat['mac_address'] = mac_address
-            stat['vendor'] = get_vendor(mac_address, self._vendor_db)
+            stat['vendor'] = self.get_vendor(mac_address, self._vendor_db)
     
             stats.append(stat)
     
@@ -476,4 +476,3 @@ class PluginModel(GlancesPluginModel):
                 )
     
         return ret
-
